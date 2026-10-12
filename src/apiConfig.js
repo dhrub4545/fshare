@@ -1,5 +1,7 @@
 // API Configuration
-// Supports optional VITE_API_BASE_URL when frontend and backend are deployed to separate domains
+// Automatically connects to your live deployed backend on Vercel
 export const API_BASE = import.meta.env.VITE_API_BASE_URL 
   ? import.meta.env.VITE_API_BASE_URL.replace(/\/$/, '') 
-  : '';
+  : (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')
+      ? 'https://p2p-file-transfer-two.vercel.app'
+      : '');
