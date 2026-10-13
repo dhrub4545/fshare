@@ -11,12 +11,8 @@ function normalizeApiBase() {
     return url.replace(/\/$/, '');
   }
 
-  // Fallback for production deployment if env var is empty
-  if (typeof window !== 'undefined' && !window.location.hostname.includes('localhost')) {
-    return 'https://p2p-file-transfer-two.vercel.app';
-  }
-
-  return '';
+  // Default to live Vercel backend for both local and production
+  return 'https://p2p-file-transfer-two.vercel.app';
 }
 
 export const API_BASE = normalizeApiBase();

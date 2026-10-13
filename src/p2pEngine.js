@@ -1,7 +1,7 @@
-// Pure Serverless WebRTC P2P Engine using PeerJS & Universal HTTPS Live Discovery
-// Zero Server Storage • Zero Backend Server • Direct Browser-to-Browser Streaming
-
+// Pure Serverless WebRTC P2P Engine using PeerJS & Dynamic Backend API Tunnel Discovery
+// Zero Server Storage • Direct Browser-to-Browser Streaming
 import Peer from 'peerjs';
+import { API_BASE } from './apiConfig';
 
 const PeerConstructor = Peer.Peer || Peer;
 
@@ -25,11 +25,11 @@ const RTC_CONFIG = {
 };
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB chunk size
-const NTFY_TOPIC = 'ghostdrop_live_channels_v3';
-const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 // In-memory registry of active channels
 const activeAnnouncements = new Map();
+const channelSubscribers = new Set();
+let pollInterval = null;
 
 // Local cross-tab BroadcastChannel for same-device instant discovery
 let bc = null;
@@ -43,8 +43,10 @@ try {
           ...msg,
           lastSeen: Date.now()
         });
+        notifySubscribers();
       } else if (msg && msg.type === 'close' && msg.code) {
         activeAnnouncements.delete(msg.code);
+        notifySubscribers();
       }
     };
   }
@@ -52,132 +54,101 @@ try {
   console.warn('[Discovery] BroadcastChannel not supported:', err);
 }
 
-// Global Cross-Device Discovery using universal HTTPS REST & SSE (Never blocked by Brave/Shields)
-let eventSource = null;
-let isListenerInitialized = false;
-
-function initDiscoveryListener() {
-  if (isListenerInitialized || typeof window === 'undefined') return;
-  isListenerInitialized = true;
-
-  // 1. Initial poll of any active channels created in the last 2 minutes
-  fetch(`${NTFY_URL}/json?poll=1&since=2m`)
-    .then((res) => res.text())
-    .then((text) => {
-      parseNtfyLines(text);
-    })
-    .catch((err) => {
-      console.warn('[Discovery] Initial poll warning:', err);
-    });
-
-  // 2. Real-time stream using Server-Sent Events (SSE)
-  if (typeof EventSource !== 'undefined') {
-    try {
-      eventSource = new EventSource(`${NTFY_URL}/sse?since=10s`);
-
-      eventSource.onmessage = (e) => {
-        try {
-          const item = JSON.parse(e.data);
-          if (item && item.message) {
-            const data = JSON.parse(item.message);
-            if (data.type === 'announce' && data.code) {
-              activeAnnouncements.set(data.code, {
-                ...data,
-                lastSeen: (item.time * 1000) || Date.now()
-              });
-            } else if (data.type === 'close' && data.code) {
-              activeAnnouncements.delete(data.code);
-            }
-          }
-        } catch (err) {}
-      };
-
-      eventSource.onerror = () => {
-        // SSE automatically reconnects on network blips
-      };
-    } catch (e) {
-      console.warn('[Discovery] EventSource init error:', e);
+// Notify all mounted components (DownloadView, ActiveFilesList) of current channel list
+function notifySubscribers() {
+  const now = Date.now();
+  const list = [];
+  for (const [code, data] of activeAnnouncements.entries()) {
+    if (now < data.expiresAt) {
+      list.push({
+        id: data.code,
+        code: data.code,
+        originalName: data.name,
+        size: data.size,
+        mimeType: data.typeMime || data.type,
+        expiresAt: data.expiresAt
+      });
+    } else {
+      activeAnnouncements.delete(code);
     }
+  }
+  for (const cb of channelSubscribers) {
+    try { cb(list); } catch (e) {}
   }
 }
 
-function parseNtfyLines(text) {
-  if (!text) return;
-  const lines = text.trim().split('\n');
-  for (const line of lines) {
-    if (!line) continue;
-    try {
-      const item = JSON.parse(line);
-      if (item && item.message) {
-        const data = JSON.parse(item.message);
-        if (data.type === 'announce' && data.code) {
-          activeAnnouncements.set(data.code, {
-            ...data,
-            lastSeen: (item.time * 1000) || Date.now()
-          });
-        } else if (data.type === 'close' && data.code) {
-          activeAnnouncements.delete(data.code);
+// Fetch active open tunnels from backend dynamically
+async function fetchActiveBackendTunnels() {
+  try {
+    const res = await fetch(`${API_BASE}/api/tunnel/active?t=${Date.now()}`, {
+      cache: 'no-store'
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.success && Array.isArray(data.files)) {
+      const currentRemoteCodes = new Set(data.files.map((f) => f.code));
+
+      // Update or add active channels from backend
+      for (const item of data.files) {
+        activeAnnouncements.set(item.code, {
+          code: item.code,
+          name: item.originalName,
+          size: item.size,
+          typeMime: item.mimeType,
+          expiresAt: item.expiresAt,
+          lastSeen: Date.now()
+        });
+      }
+
+      // Remove non-local channels that are no longer reported active by backend
+      for (const [code, val] of activeAnnouncements.entries()) {
+        if (!val.isLocal && !currentRemoteCodes.has(code)) {
+          activeAnnouncements.delete(code);
         }
       }
-    } catch (e) {}
+
+      notifySubscribers();
+    }
+  } catch (err) {
+    console.warn('[Discovery] Backend poll warning:', err);
   }
 }
 
 export function publishChannel(data) {
   // Broadcast locally across tabs
-  if (bc) bc.postMessage(data);
-
-  // Broadcast globally across devices via universal HTTPS
-  try {
-    fetch(NTFY_URL, {
-      method: 'POST',
-      body: JSON.stringify(data),
-      headers: { 'Title': 'GhostDrop' }
-    }).catch(() => {});
-  } catch (e) {}
+  if (bc) {
+    try { bc.postMessage(data); } catch (e) {}
+  }
 }
 
 export function requestChannelScan() {
-  // Re-poll the last 2 minutes for immediate fresh list
-  fetch(`${NTFY_URL}/json?poll=1&since=2m`)
-    .then((res) => res.text())
-    .then((text) => {
-      parseNtfyLines(text);
-    })
-    .catch(() => {});
+  fetchActiveBackendTunnels();
 }
 
 // ----------------------------------------------------
 // DISCOVERY HOOK FOR RECEIVER (Listens for Open Channels)
 // ----------------------------------------------------
 export function subscribeToOpenChannels(onUpdate) {
-  initDiscoveryListener();
-  requestChannelScan();
+  channelSubscribers.add(onUpdate);
 
-  // Periodic poll & clean up expired channels
-  const interval = setInterval(() => {
-    requestChannelScan();
+  // Send current cached list immediately
+  notifySubscribers();
 
-    const now = Date.now();
-    const list = [];
-    for (const [code, data] of activeAnnouncements.entries()) {
-      if (now - data.lastSeen < 30000 && now < data.expiresAt) {
-        list.push({
-          id: data.code,
-          code: data.code,
-          originalName: data.name,
-          size: data.size,
-          mimeType: data.typeMime || data.type,
-          expiresAt: data.expiresAt
-        });
-      } else if (now - data.lastSeen >= 30000) {
-        activeAnnouncements.delete(code);
-      }
+  // Fetch fresh tunnels from backend immediately
+  fetchActiveBackendTunnels();
+
+  // Polling every 2.5 seconds (shared across all subscribers)
+  if (!pollInterval) {
+    pollInterval = setInterval(fetchActiveBackendTunnels, 2500);
+  }
+
+  return () => {
+    channelSubscribers.delete(onUpdate);
+    if (channelSubscribers.size === 0 && pollInterval) {
+      clearInterval(pollInterval);
+      pollInterval = null;
     }
-    onUpdate(list);
-  }, 1500);
-
-  return () => clearInterval(interval);
+  };
 }
 
 // ----------------------------------------------------
@@ -186,14 +157,12 @@ export function subscribeToOpenChannels(onUpdate) {
 export function startSenderTunnel(code, file, { onStatus, onProgress, onError }) {
   const peerId = `ghostdrop-${code}`;
   let isClosed = false;
-  let broadcastTimer = null;
+  let heartbeatTimer = null;
 
   const peer = new PeerConstructor(peerId, {
     config: RTC_CONFIG,
     debug: 1
   });
-
-  initDiscoveryListener();
 
   const channelData = {
     type: 'announce',
@@ -206,16 +175,44 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
     lastSeen: Date.now()
   };
   activeAnnouncements.set(code, channelData);
-
-  // Announce immediately
+  notifySubscribers();
   publishChannel(channelData);
 
-  // Re-announce heartbeat every 6 seconds to keep channel alive
-  broadcastTimer = setInterval(() => {
+  // 1. Register active tunnel on backend so other devices can discover it dynamically
+  fetch(`${API_BASE}/api/tunnel/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      code,
+      originalName: file.name,
+      size: file.size,
+      mimeType: file.type || 'application/octet-stream'
+    })
+  }).catch((err) => {
+    console.warn('[Backend] Register tunnel warning:', err);
+  });
+
+  // 2. Send heartbeat to backend every 7 seconds to keep channel listed as active
+  heartbeatTimer = setInterval(() => {
     if (isClosed) return;
-    channelData.lastSeen = Date.now();
-    publishChannel(channelData);
-  }, 6000);
+    fetch(`${API_BASE}/api/tunnel/heartbeat/${code}`, {
+      method: 'POST'
+    }).catch(() => {});
+  }, 7000);
+
+  // Auto clean-up on tab close / reload
+  const handleUnload = () => {
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(`${API_BASE}/api/tunnel/${code}`);
+      } else {
+        fetch(`${API_BASE}/api/tunnel/${code}`, { method: 'DELETE', keepalive: true });
+      }
+    } catch (e) {}
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', handleUnload);
+  }
 
   peer.on('open', (id) => {
     console.log('[P2P Sender] Registered on PeerJS Cloud with ID:', id);
@@ -320,9 +317,14 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
   return {
     close: () => {
       isClosed = true;
-      if (broadcastTimer) clearInterval(broadcastTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleUnload);
+      }
       activeAnnouncements.delete(code);
+      notifySubscribers();
       publishChannel({ type: 'close', code });
+      fetch(`${API_BASE}/api/tunnel/${code}`, { method: 'DELETE' }).catch(() => {});
       try { peer.destroy(); } catch (e) {}
     }
   };
