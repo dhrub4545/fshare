@@ -1,4 +1,4 @@
-// Pure Serverless WebRTC P2P Engine using PeerJS & Public Relay Discovery
+// Pure Serverless WebRTC P2P Engine using PeerJS & Dual Relay Discovery
 // Zero Server Storage • Zero Backend Server • Direct Browser-to-Browser Streaming
 
 import Peer from 'peerjs';
@@ -6,50 +6,108 @@ import { joinRoom } from 'trystero';
 
 const PeerConstructor = Peer.Peer || Peer;
 
+// STUN + Open Relay TURN servers for reliable Mobile 4G/5G <-> PC connections
 const RTC_CONFIG = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun.cloudflare.com:3478' }
+    { urls: 'stun:stun.cloudflare.com:3478' },
+    {
+      urls: [
+        'turn:openrelay.metered.ca:80',
+        'turn:openrelay.metered.ca:443',
+        'turn:openrelay.metered.ca:443?transport=tcp'
+      ],
+      username: 'openrelay',
+      credential: 'openrelay'
+    }
   ]
 };
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB chunk size
-const LOBBY_ROOM_ID = 'ghostdrop-discovery-v1';
+const LOBBY_ROOM_ID = 'ghostdrop-discovery-v2';
 
-// Global Trystero Discovery Lobby for 1-Click Open Channel Detection
+// In-memory registry of active channels
+const activeAnnouncements = new Map();
+
+// Local cross-tab broadcast channel
+let bc = null;
+try {
+  if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
+    bc = new BroadcastChannel('ghostdrop-local-lobby');
+    bc.onmessage = (e) => {
+      const msg = e.data;
+      if (msg && msg.type === 'broadcast' && msg.data) {
+        activeAnnouncements.set(msg.data.code, {
+          ...msg.data,
+          lastSeen: Date.now()
+        });
+      } else if (msg && msg.type === 'request') {
+        for (const [, data] of activeAnnouncements.entries()) {
+          if (data && data.isLocal) {
+            bc.postMessage({ type: 'broadcast', data });
+          }
+        }
+      }
+    };
+  }
+} catch (err) {
+  console.warn('[Discovery] BroadcastChannel not supported:', err);
+}
+
+// Global Trystero Relay Lobby for cross-device discovery
 let lobbyRoom = null;
-let broadcastAction = null;
-let requestAction = null;
-const activeAnnouncements = new Map(); // Senders currently broadcasting
+let broadcastSend = null;
+let requestSend = null;
 
 function getLobby() {
-  if (!lobbyRoom) {
+  if (!lobbyRoom && typeof window !== 'undefined') {
     try {
       lobbyRoom = joinRoom({ appId: 'ghostdrop-file-sharing' }, LOBBY_ROOM_ID);
-      const [sendBroadcast, onBroadcast] = lobbyRoom.makeAction('broadcast');
-      const [sendRequest, onRequest] = lobbyRoom.makeAction('request');
 
-      broadcastAction = sendBroadcast;
-      requestAction = sendRequest;
+      const broadcastAction = lobbyRoom.makeAction('broadcast');
+      const requestAction = lobbyRoom.makeAction('request');
 
-      // When another sender announces their channel
-      onBroadcast((channelData) => {
+      broadcastSend = (data, targetPeer) => {
+        try {
+          if (broadcastAction && typeof broadcastAction.send === 'function') {
+            broadcastAction.send(data, targetPeer);
+          }
+        } catch (e) {}
+      };
+
+      requestSend = (data, targetPeer) => {
+        try {
+          if (requestAction && typeof requestAction.send === 'function') {
+            requestAction.send(data, targetPeer);
+          }
+        } catch (e) {}
+      };
+
+      // In Trystero, onReceive is a setter
+      broadcastAction.onReceive = (channelData) => {
         if (channelData && channelData.code) {
           activeAnnouncements.set(channelData.code, {
             ...channelData,
             lastSeen: Date.now()
           });
         }
-      });
+      };
 
-      // When a new receiver joins and requests currently open channels
-      onRequest(() => {
-        // Reply with all local active broadcasts
-        for (const [code, data] of activeAnnouncements.entries()) {
+      requestAction.onReceive = () => {
+        for (const [, data] of activeAnnouncements.entries()) {
           if (data && data.isLocal) {
-            sendBroadcast(data);
+            broadcastSend(data);
+          }
+        }
+      };
+
+      // When another peer joins the lobby, push local active channels immediately
+      lobbyRoom.onPeerJoin((peerId) => {
+        for (const [, data] of activeAnnouncements.entries()) {
+          if (data && data.isLocal) {
+            broadcastSend(data, peerId);
           }
         }
       });
@@ -57,33 +115,29 @@ function getLobby() {
       console.warn('[Discovery Lobby] Error initializing relay lobby:', err);
     }
   }
-  return { lobbyRoom, broadcastAction, requestAction };
+  return { lobbyRoom, broadcastSend, requestSend };
 }
 
 export function requestChannelScan() {
-  const { requestAction } = getLobby();
-  if (requestAction) {
-    requestAction('ping');
-  }
+  const { requestSend: sendReq } = getLobby();
+  if (sendReq) sendReq('ping');
+  if (bc) bc.postMessage({ type: 'request' });
 }
 
 // ----------------------------------------------------
 // DISCOVERY HOOK FOR RECEIVER (Listens for Open Channels)
 // ----------------------------------------------------
 export function subscribeToOpenChannels(onUpdate) {
-  const { requestAction } = getLobby();
+  requestChannelScan();
 
-  // Ask any active senders to announce
-  if (requestAction) {
-    requestAction('ping');
-  }
-
-  // Periodic cleanup and update callback
+  // Periodic scan & clean up expired channels
   const interval = setInterval(() => {
+    requestChannelScan();
+
     const now = Date.now();
     const list = [];
     for (const [code, data] of activeAnnouncements.entries()) {
-      if (now - data.lastSeen < 15000 && now < data.expiresAt) {
+      if (now - data.lastSeen < 20000 && now < data.expiresAt) {
         list.push({
           id: data.code,
           code: data.code,
@@ -92,7 +146,7 @@ export function subscribeToOpenChannels(onUpdate) {
           mimeType: data.type,
           expiresAt: data.expiresAt
         });
-      } else if (now - data.lastSeen >= 15000) {
+      } else if (now - data.lastSeen >= 20000) {
         activeAnnouncements.delete(code);
       }
     }
@@ -115,8 +169,8 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
     debug: 1
   });
 
-  // Announce channel in discovery lobby so receivers can click it with 1 click
-  const { broadcastAction } = getLobby();
+  getLobby();
+
   const channelData = {
     code,
     name: file.name,
@@ -128,12 +182,13 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
   };
   activeAnnouncements.set(code, channelData);
 
-  const sendAnnounce = () => {
-    if (isClosed || !broadcastAction) return;
-    broadcastAction(channelData);
+  const announce = () => {
+    if (isClosed) return;
+    if (broadcastSend) broadcastSend(channelData);
+    if (bc) bc.postMessage({ type: 'broadcast', data: channelData });
   };
-  sendAnnounce();
-  broadcastTimer = setInterval(sendAnnounce, 3000);
+  announce();
+  broadcastTimer = setInterval(announce, 2500);
 
   peer.on('open', (id) => {
     console.log('[P2P Sender] Registered on PeerJS Cloud with ID:', id);
@@ -279,12 +334,14 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
     conn.on('data', (data) => {
       if (isClosed) return;
 
-      if (data && typeof data === 'object' && !(data instanceof ArrayBuffer)) {
+      const isBinary = data instanceof ArrayBuffer || ArrayBuffer.isView(data) || data instanceof Blob;
+
+      if (!isBinary && typeof data === 'object' && data !== null) {
         if (data.type === 'header') {
           fileInfo = data;
           console.log('[P2P Receiver] Receiving file metadata:', fileInfo);
         } else if (data.type === 'complete') {
-          console.log('[P2P Receiver] Transfer complete! Assembling file...');
+          console.log('[P2P Receiver] Transfer complete! Assembling file with', receivedChunks.length, 'chunks...');
           onStatus('assembling');
 
           // Assemble Blob
@@ -292,28 +349,40 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
             type: fileInfo?.mimeType || 'application/octet-stream'
           });
 
-          // Trigger browser download directly
+          // Create permanent object URL for download
           const downloadUrl = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = downloadUrl;
-          a.download = fileInfo?.name || 'downloaded_file';
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          const fileName = fileInfo?.name || 'downloaded_file';
 
-          setTimeout(() => URL.revokeObjectURL(downloadUrl), 10000);
+          // Try automatic desktop click download
+          try {
+            const a = document.createElement('a');
+            a.href = downloadUrl;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          } catch (e) {
+            console.warn('[P2P Receiver] Auto click error:', e);
+          }
 
           onComplete({
             blob,
-            name: fileInfo?.name || 'file',
-            size: fileInfo?.size || blob.size
+            url: downloadUrl,
+            name: fileName,
+            size: fileInfo?.size || blob.size,
+            mimeType: fileInfo?.mimeType || 'application/octet-stream'
           });
           onStatus('completed');
         }
       } else {
-        // Binary Chunk (ArrayBuffer)
-        receivedChunks.push(data);
-        receivedBytes += data.byteLength;
+        // Binary Chunk (ArrayBuffer or Uint8Array view)
+        const chunk = ArrayBuffer.isView(data)
+          ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+          : data;
+        const chunkSize = chunk.byteLength || chunk.size || 0;
+
+        receivedChunks.push(chunk);
+        receivedBytes += chunkSize;
 
         const total = fileInfo ? fileInfo.size : receivedBytes;
         const percent = Math.min(100, Math.round((receivedBytes / total) * 100));

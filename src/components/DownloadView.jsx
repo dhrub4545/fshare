@@ -16,6 +16,7 @@ export default function DownloadView({ initialCode, showToast }) {
   const [downloadStats, setDownloadStats] = useState({ percent: 0, bytesReceived: 0, totalBytes: 0, speedMBps: 0 });
   const [showManualInput, setShowManualInput] = useState(Boolean(initialCode));
   const [manualCode, setManualCode] = useState(initialCode || '');
+  const [completedFile, setCompletedFile] = useState(null);
   const receiverSessionRef = useRef(null);
 
   // Subscribe to live open broadcast channels via P2P relay lobby
@@ -48,6 +49,7 @@ export default function DownloadView({ initialCode, showToast }) {
   const connectToChannel = (code, fileInfo) => {
     setSelectedChannel({ code, file: fileInfo });
     setReceivingStatus('connecting');
+    setCompletedFile(null);
     showToast(`Connecting to channel: ${fileInfo.name || code}...`);
 
     receiverSessionRef.current = startReceiverTunnel(code, {
@@ -55,7 +57,7 @@ export default function DownloadView({ initialCode, showToast }) {
         setReceivingStatus(status);
         if (status === 'completed') {
           confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
-          showToast('File downloaded directly to your device!');
+          showToast('File transfer complete! Ready to save.');
         }
       },
       onProgress: (stats) => {
@@ -63,6 +65,7 @@ export default function DownloadView({ initialCode, showToast }) {
       },
       onComplete: (fileData) => {
         console.log('[P2P Receiver] Completed transfer:', fileData);
+        setCompletedFile(fileData);
       },
       onError: (err) => {
         setReceivingStatus('idle');
@@ -91,6 +94,7 @@ export default function DownloadView({ initialCode, showToast }) {
       receiverSessionRef.current = null;
     }
     setSelectedChannel(null);
+    setCompletedFile(null);
     setReceivingStatus('idle');
     setDownloadStats({ percent: 0, bytesReceived: 0, totalBytes: 0, speedMBps: 0 });
   };
@@ -196,14 +200,48 @@ export default function DownloadView({ initialCode, showToast }) {
           )}
 
           {receivingStatus === 'completed' && (
-            <div style={{ textAlign: 'center', padding: '1.5rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '16px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-              <CheckCircle2 size={36} color="#10b981" style={{ margin: '0 auto 0.75rem' }} />
-              <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#10b981' }}>File Downloaded Successfully!</div>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.35rem', marginBottom: '1rem' }}>
-                Transferred {formatBytes(selectedChannel.file?.size || downloadStats.totalBytes)} directly from sender to your device.
+            <div style={{ textAlign: 'center', padding: '1.75rem 1.25rem', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '16px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+              <CheckCircle2 size={42} color="#10b981" style={{ margin: '0 auto 0.75rem' }} />
+              <div style={{ fontWeight: 700, fontSize: '1.25rem', color: '#10b981' }}>File Ready for Download!</div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.35rem', marginBottom: '1.25rem' }}>
+                Transferred {formatBytes(completedFile?.size || downloadStats.totalBytes)} directly with zero server storage.
               </p>
+
+              {completedFile?.url && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxWidth: '360px', margin: '0 auto 1.25rem' }}>
+                  <a 
+                    href={completedFile.url} 
+                    download={completedFile.name}
+                    className="btn btn-primary"
+                    style={{ padding: '0.9rem 1.5rem', fontSize: '1rem', width: '100%', textDecoration: 'none' }}
+                  >
+                    <ArrowDownCircle size={20} /> Tap to Save / Download File
+                  </a>
+
+                  {typeof navigator !== 'undefined' && navigator.canShare && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        try {
+                          const fileObj = new File([completedFile.blob], completedFile.name, { type: completedFile.mimeType });
+                          if (navigator.canShare({ files: [fileObj] })) {
+                            navigator.share({ files: [fileObj], title: completedFile.name });
+                          }
+                        } catch (e) {
+                          console.warn('Share error:', e);
+                        }
+                      }}
+                      style={{ fontSize: '0.85rem', padding: '0.65rem 1rem' }}
+                    >
+                      📲 Save to Device / Share
+                    </button>
+                  )}
+                </div>
+              )}
+
               <button 
-                className="btn btn-primary"
+                className="btn btn-secondary"
+                style={{ fontSize: '0.85rem', padding: '0.45rem 1rem' }}
                 onClick={disconnectSession}
               >
                 Connect to Another Channel
