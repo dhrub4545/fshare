@@ -223,18 +223,26 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
     console.log('[P2P Sender] Incoming connection from Receiver!');
     onStatus('connecting');
 
-    conn.on('open', () => {
+    let streamStarted = false;
+
+    const startStreaming = () => {
+      if (streamStarted || isClosed) return;
+      streamStarted = true;
+
       console.log('[P2P Sender] ⚡ WebRTC Data Channel OPEN! Streaming file...');
       onStatus('transferring');
-      if (broadcastTimer) clearInterval(broadcastTimer);
 
       // Send metadata header first
-      conn.send({
-        type: 'header',
-        name: file.name,
-        size: file.size,
-        mimeType: file.type || 'application/octet-stream'
-      });
+      try {
+        conn.send({
+          type: 'header',
+          name: file.name,
+          size: file.size,
+          mimeType: file.type || 'application/octet-stream'
+        });
+      } catch (err) {
+        console.warn('[P2P Sender] Error sending header:', err);
+      }
 
       let offset = 0;
       const startTime = Date.now();
@@ -246,7 +254,9 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
 
         if (offset >= file.size) {
           // Finished sending!
-          conn.send({ type: 'complete' });
+          try {
+            conn.send({ type: 'complete' });
+          } catch (e) {}
           console.log('[P2P Sender] File streaming complete!');
           onStatus('completed');
           return;
@@ -258,7 +268,14 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
         reader.onload = (e) => {
           if (isClosed || conn.open === false) return;
 
-          conn.send(e.target.result);
+          try {
+            conn.send(e.target.result);
+          } catch (sendErr) {
+            console.error('[P2P Sender] Send chunk error:', sendErr);
+            if (onError) onError('Data send interrupted: ' + sendErr.message);
+            return;
+          }
+
           offset += e.target.result.byteLength;
 
           // Progress calculation
@@ -280,15 +297,12 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
             speedMBps
           });
 
-          // Flow control backpressure check
+          // Pacing check for smooth non-blocking streaming
           const dataChannel = conn.dataChannel;
-          if (dataChannel && dataChannel.bufferedAmount > CHUNK_SIZE * 8) {
-            dataChannel.onbufferedamountlow = () => {
-              dataChannel.onbufferedamountlow = null;
-              readAndSendChunk();
-            };
+          if (dataChannel && dataChannel.bufferedAmount > CHUNK_SIZE * 4) {
+            setTimeout(readAndSendChunk, 20);
           } else {
-            readAndSendChunk();
+            setTimeout(readAndSendChunk, 0);
           }
         };
 
@@ -297,6 +311,20 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
 
       // Start streaming
       readAndSendChunk();
+    };
+
+    if (conn.open) {
+      setTimeout(startStreaming, 100);
+    } else {
+      conn.on('open', () => {
+        setTimeout(startStreaming, 150);
+      });
+    }
+
+    conn.on('data', (data) => {
+      if (data && data.type === 'ready') {
+        startStreaming();
+      }
     });
 
     conn.on('error', (err) => {
@@ -333,11 +361,11 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
 // ----------------------------------------------------
 // RECEIVER ENGINE (PeerJS Direct Receive)
 // ----------------------------------------------------
-export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, onError }) {
+export function startReceiverTunnel(code, { initialFileInfo, onStatus, onProgress, onComplete, onError }) {
   const targetPeerId = `ghostdrop-${code}`;
   let isClosed = false;
   let receivedChunks = [];
-  let fileInfo = null;
+  let fileInfo = initialFileInfo || null;
   let receivedBytes = 0;
   let startTime = Date.now();
   let lastTime = startTime;
@@ -354,12 +382,21 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
 
     const conn = peer.connect(targetPeerId, { reliable: true });
 
-    conn.on('open', () => {
-      console.log('[P2P Receiver] ⚡ WebRTC Data Channel OPEN! Receiving stream...');
+    const handleConnOpen = () => {
+      console.log('[P2P Receiver] ⚡ WebRTC Data Channel OPEN! Sending ready signal...');
       onStatus('transferring');
       startTime = Date.now();
       lastTime = startTime;
-    });
+      try {
+        conn.send({ type: 'ready' });
+      } catch (e) {}
+    };
+
+    if (conn.open) {
+      handleConnOpen();
+    } else {
+      conn.on('open', handleConnOpen);
+    }
 
     conn.on('data', (data) => {
       if (isClosed) return;
@@ -368,7 +405,7 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
 
       if (!isBinary && typeof data === 'object' && data !== null) {
         if (data.type === 'header') {
-          fileInfo = data;
+          fileInfo = { ...fileInfo, ...data };
           console.log('[P2P Receiver] Receiving file metadata:', fileInfo);
         } else if (data.type === 'complete') {
           console.log('[P2P Receiver] Transfer complete! Assembling file with', receivedChunks.length, 'chunks...');
@@ -405,17 +442,24 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
           onStatus('completed');
         }
       } else {
-        // Binary Chunk: handle ArrayBuffer or Uint8Array view
-        const chunk = ArrayBuffer.isView(data)
-          ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
-          : data;
-        const chunkSize = chunk.byteLength || chunk.size || 0;
+        // Binary Chunk: handle ArrayBuffer, Uint8Array view, or Blob
+        let chunk;
+        if (data instanceof ArrayBuffer) {
+          chunk = data;
+        } else if (ArrayBuffer.isView(data)) {
+          chunk = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        } else if (data instanceof Blob) {
+          chunk = data;
+        } else {
+          return;
+        }
 
+        const chunkSize = chunk.byteLength || chunk.size || 0;
         receivedChunks.push(chunk);
         receivedBytes += chunkSize;
 
-        const total = fileInfo ? fileInfo.size : receivedBytes;
-        const percent = Math.min(100, Math.round((receivedBytes / total) * 100));
+        const total = (fileInfo && fileInfo.size > 0) ? fileInfo.size : (receivedBytes || 1);
+        const percent = total > 0 ? Math.min(100, Math.round((receivedBytes / total) * 100)) : 0;
 
         // Speed calculation
         const now = Date.now();

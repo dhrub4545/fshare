@@ -53,6 +53,7 @@ export default function DownloadView({ initialCode, showToast }) {
     showToast(`Connecting to channel: ${fileInfo.name || code}...`);
 
     receiverSessionRef.current = startReceiverTunnel(code, {
+      initialFileInfo: fileInfo,
       onStatus: (status) => {
         setReceivingStatus(status);
         if (status === 'completed') {
@@ -66,6 +67,13 @@ export default function DownloadView({ initialCode, showToast }) {
       onComplete: (fileData) => {
         console.log('[P2P Receiver] Completed transfer:', fileData);
         setCompletedFile(fileData);
+        setDownloadStats((prev) => ({ ...prev, percent: 100 }));
+        if (fileData?.name) {
+          setSelectedChannel((prev) => ({
+            ...prev,
+            file: { name: fileData.name, size: fileData.size, type: fileData.mimeType }
+          }));
+        }
       },
       onError: (err) => {
         setReceivingStatus('idle');
