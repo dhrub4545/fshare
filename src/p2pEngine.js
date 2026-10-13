@@ -1,8 +1,8 @@
-// Pure Serverless WebRTC P2P Engine using PeerJS & Dual Relay Discovery
+// Pure Serverless WebRTC P2P Engine using PeerJS & Live MQTT Public Relay
 // Zero Server Storage • Zero Backend Server • Direct Browser-to-Browser Streaming
 
 import Peer from 'peerjs';
-import { joinRoom } from 'trystero';
+import mqtt from 'mqtt';
 
 const PeerConstructor = Peer.Peer || Peer;
 
@@ -26,12 +26,13 @@ const RTC_CONFIG = {
 };
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB chunk size
-const LOBBY_ROOM_ID = 'ghostdrop-discovery-v2';
+const MQTT_TOPIC = 'ghostdrop/live/channels/v2';
+const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
 
 // In-memory registry of active channels
 const activeAnnouncements = new Map();
 
-// Local cross-tab broadcast channel
+// Local cross-tab BroadcastChannel for same-device instant discovery
 let bc = null;
 try {
   if (typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined') {
@@ -43,6 +44,8 @@ try {
           ...msg.data,
           lastSeen: Date.now()
         });
+      } else if (msg && msg.type === 'close' && msg.code) {
+        activeAnnouncements.delete(msg.code);
       } else if (msg && msg.type === 'request') {
         for (const [, data] of activeAnnouncements.entries()) {
           if (data && data.isLocal) {
@@ -56,71 +59,66 @@ try {
   console.warn('[Discovery] BroadcastChannel not supported:', err);
 }
 
-// Global Trystero Relay Lobby for cross-device discovery
-let lobbyRoom = null;
-let broadcastSend = null;
-let requestSend = null;
+// Global live public relay client (MQTT over WebSocket)
+let mqttClient = null;
 
-function getLobby() {
-  if (!lobbyRoom && typeof window !== 'undefined') {
+function getMqttClient() {
+  if (!mqttClient && typeof window !== 'undefined') {
     try {
-      lobbyRoom = joinRoom({ appId: 'ghostdrop-file-sharing' }, LOBBY_ROOM_ID);
+      const clientId = 'gd_' + Math.random().toString(16).substring(2, 10);
+      mqttClient = mqtt.connect(MQTT_BROKER, {
+        clientId,
+        clean: true,
+        connectTimeout: 5000,
+        reconnectPeriod: 3000
+      });
 
-      const broadcastAction = lobbyRoom.makeAction('broadcast');
-      const requestAction = lobbyRoom.makeAction('request');
+      mqttClient.on('connect', () => {
+        console.log('[Discovery Relay] Connected to live public MQTT relay!');
+        mqttClient.subscribe(MQTT_TOPIC, (err) => {
+          if (!err) {
+            // Trigger announcement request
+            mqttClient.publish(MQTT_TOPIC, JSON.stringify({ type: 'ping' }));
+          }
+        });
+      });
 
-      broadcastSend = (data, targetPeer) => {
+      mqttClient.on('message', (topic, payload) => {
         try {
-          if (broadcastAction && typeof broadcastAction.send === 'function') {
-            broadcastAction.send(data, targetPeer);
+          const msg = JSON.parse(payload.toString());
+          if (msg.type === 'announce' && msg.code) {
+            activeAnnouncements.set(msg.code, {
+              ...msg,
+              lastSeen: Date.now()
+            });
+          } else if (msg.type === 'close' && msg.code) {
+            activeAnnouncements.delete(msg.code);
+          } else if (msg.type === 'ping') {
+            // Senders reply with their active channels
+            for (const [, data] of activeAnnouncements.entries()) {
+              if (data && data.isLocal) {
+                mqttClient.publish(MQTT_TOPIC, JSON.stringify({ type: 'announce', ...data }));
+              }
+            }
           }
         } catch (e) {}
-      };
+      });
 
-      requestSend = (data, targetPeer) => {
-        try {
-          if (requestAction && typeof requestAction.send === 'function') {
-            requestAction.send(data, targetPeer);
-          }
-        } catch (e) {}
-      };
-
-      // In Trystero, onReceive is a setter
-      broadcastAction.onReceive = (channelData) => {
-        if (channelData && channelData.code) {
-          activeAnnouncements.set(channelData.code, {
-            ...channelData,
-            lastSeen: Date.now()
-          });
-        }
-      };
-
-      requestAction.onReceive = () => {
-        for (const [, data] of activeAnnouncements.entries()) {
-          if (data && data.isLocal) {
-            broadcastSend(data);
-          }
-        }
-      };
-
-      // When another peer joins the lobby, push local active channels immediately
-      lobbyRoom.onPeerJoin((peerId) => {
-        for (const [, data] of activeAnnouncements.entries()) {
-          if (data && data.isLocal) {
-            broadcastSend(data, peerId);
-          }
-        }
+      mqttClient.on('error', (err) => {
+        console.warn('[Discovery Relay] MQTT broker warning:', err.message);
       });
     } catch (err) {
-      console.warn('[Discovery Lobby] Error initializing relay lobby:', err);
+      console.warn('[Discovery Relay] MQTT init error:', err);
     }
   }
-  return { lobbyRoom, broadcastSend, requestSend };
+  return mqttClient;
 }
 
 export function requestChannelScan() {
-  const { requestSend: sendReq } = getLobby();
-  if (sendReq) sendReq('ping');
+  const client = getMqttClient();
+  if (client && client.connected) {
+    client.publish(MQTT_TOPIC, JSON.stringify({ type: 'ping' }));
+  }
   if (bc) bc.postMessage({ type: 'request' });
 }
 
@@ -128,6 +126,7 @@ export function requestChannelScan() {
 // DISCOVERY HOOK FOR RECEIVER (Listens for Open Channels)
 // ----------------------------------------------------
 export function subscribeToOpenChannels(onUpdate) {
+  getMqttClient();
   requestChannelScan();
 
   // Periodic scan & clean up expired channels
@@ -169,7 +168,7 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
     debug: 1
   });
 
-  getLobby();
+  const client = getMqttClient();
 
   const channelData = {
     code,
@@ -184,7 +183,10 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
 
   const announce = () => {
     if (isClosed) return;
-    if (broadcastSend) broadcastSend(channelData);
+    const payload = JSON.stringify({ type: 'announce', ...channelData });
+    if (client && client.connected) {
+      client.publish(MQTT_TOPIC, payload);
+    }
     if (bc) bc.postMessage({ type: 'broadcast', data: channelData });
   };
   announce();
@@ -295,6 +297,10 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
       isClosed = true;
       if (broadcastTimer) clearInterval(broadcastTimer);
       activeAnnouncements.delete(code);
+      if (client && client.connected) {
+        client.publish(MQTT_TOPIC, JSON.stringify({ type: 'close', code }));
+      }
+      if (bc) bc.postMessage({ type: 'close', code });
       try { peer.destroy(); } catch (e) {}
     }
   };
@@ -375,7 +381,7 @@ export function startReceiverTunnel(code, { onStatus, onProgress, onComplete, on
           onStatus('completed');
         }
       } else {
-        // Binary Chunk (ArrayBuffer or Uint8Array view)
+        // Binary Chunk: handle ArrayBuffer or Uint8Array view
         const chunk = ArrayBuffer.isView(data)
           ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
           : data;
