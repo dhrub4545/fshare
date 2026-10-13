@@ -882,30 +882,6 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
-/* Responsive adjustments */
-@media (max-width: 640px) {
-  .hero-title {
-    font-size: 2rem;
-  }
-  .tabs-wrapper {
-    width: 100%;
-  }
-  .tab-button {
-    flex: 1;
-    padding: 0.75rem 1rem;
-    font-size: 0.85rem;
-    justify-content: center;
-  }
-  .glass-panel {
-    padding: 1.5rem;
-  }
-  .code-digits {
-    font-size: 2rem;
-  }
-  .download-search-box {
-    flex-direction: column;
-  }
-}
 
 /* Open Channels Radar & 1-Click Connect */
 .open-channels-section {
@@ -1088,4 +1064,443 @@ body {
 .open-channel-broadcast-alert strong {
   color: #34d399;
 }
+
+/* ======================================================== */
+/* COMPREHENSIVE RESPONSIVE DESIGN (DESKTOP, TABLET, MOBILE) */
+/* ======================================================== */
+
+/* Tablet & iPad screens (<= 1024px) */
+@media (max-width: 1024px) {
+  .main-wrapper {
+    max-width: 840px;
+    padding: 2rem 1.5rem 3.5rem;
+  }
+}
+
+/* Medium Mobile & Tablet Portrait (<= 768px) */
+@media (max-width: 768px) {
+  .main-wrapper {
+    padding: 1.75rem 1.25rem 3rem;
+  }
+
+  .hero-banner {
+    margin-bottom: 2rem;
+  }
+
+  .hero-title {
+    font-size: clamp(1.85rem, 5.5vw, 2.5rem);
+  }
+
+  .glass-panel {
+    padding: 1.75rem 1.35rem;
+  }
+
+  .tabs-container {
+    margin-bottom: 2rem;
+  }
+}
+
+/* Standard Mobile Screens (<= 640px) */
+@media (max-width: 640px) {
+  /* Header */
+  .header-content {
+    padding: 0.75rem 1rem;
+    gap: 0.5rem;
+  }
+
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .logo-text h1 {
+    font-size: 1.15rem;
+  }
+
+  .status-text-full {
+    display: none;
+  }
+
+  .status-indicator {
+    padding: 0.35rem 0.65rem;
+    font-size: 0.75rem;
+  }
+
+  /* Main Wrapper */
+  .main-wrapper {
+    padding: 1.25rem 1rem 3rem;
+  }
+
+  /* Hero Banner */
+  .hero-banner {
+    margin-bottom: 1.5rem;
+  }
+
+  .hero-pill {
+    font-size: 0.75rem;
+    padding: 0.3rem 0.75rem;
+    max-width: 100%;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.3;
+  }
+
+  .hero-title {
+    font-size: clamp(1.65rem, 5.2vw, 2.25rem);
+    line-height: 1.2;
+    margin-bottom: 0.5rem;
+  }
+
+  .hero-subtitle {
+    font-size: 0.9rem;
+    line-height: 1.5;
+    padding: 0 0.25rem;
+  }
+
+  /* Tabs Switcher */
+  .tabs-container {
+    width: 100%;
+    margin-bottom: 1.5rem;
+  }
+
+  .tabs-wrapper {
+    width: 100%;
+    display: flex;
+    padding: 0.3rem;
+    border-radius: var(--radius-lg);
+  }
+
+  .tab-button {
+    flex: 1;
+    padding: 0.75rem 0.4rem;
+    font-size: 0.85rem;
+    justify-content: center;
+    min-height: 46px;
+    border-radius: var(--radius-md);
+    gap: 0.4rem;
+  }
+
+  /* Glass Panel */
+  .glass-panel {
+    padding: 1.25rem 1rem;
+    border-radius: var(--radius-lg);
+  }
+
+  /* Dropzone */
+  .dropzone {
+    padding: 2rem 1rem;
+    border-radius: var(--radius-md);
+  }
+
+  .upload-icon-circle {
+    width: 56px;
+    height: 56px;
+    margin-bottom: 0.85rem;
+  }
+
+  .dropzone-title {
+    font-size: 1.05rem;
+  }
+
+  .dropzone-desc {
+    font-size: 0.85rem;
+    margin-bottom: 1rem;
+  }
+
+  .upload-meta-info {
+    flex-direction: column;
+    gap: 0.45rem;
+    align-items: center;
+    font-size: 0.75rem;
+  }
+
+  /* Selected File Card */
+  .selected-file-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.9rem;
+    padding: 1rem;
+  }
+
+  .file-left {
+    width: 100%;
+    gap: 0.75rem;
+  }
+
+  .file-icon-box {
+    width: 42px;
+    height: 42px;
+  }
+
+  .file-name-text {
+    max-width: 100%;
+    font-size: 0.9rem;
+  }
+
+  .selected-file-card .btn {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  /* Broadcast Alert Banner */
+  .open-channel-broadcast-alert {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.65rem;
+    padding: 0.9rem 1rem;
+    font-size: 0.85rem;
+    border-radius: var(--radius-md);
+  }
+
+  /* 6-Digit Code Highlight Box */
+  .code-box-wrapper {
+    padding: 1.25rem 0.85rem;
+    margin: 1.25rem 0;
+    border-radius: var(--radius-md);
+  }
+
+  .code-digits {
+    font-size: clamp(1.75rem, 8.5vw, 2.5rem);
+    letter-spacing: clamp(0.1em, 2vw, 0.25em);
+    padding: 0.2rem 0.4rem;
+    word-break: break-all;
+  }
+
+  .code-actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 0.6rem;
+  }
+
+  .code-actions .btn,
+  .code-actions .timer-pill {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  /* Share Link Input Group */
+  .share-link-input-group {
+    padding: 0.35rem 0.35rem 0.35rem 0.75rem;
+  }
+
+  .share-link-input-group input {
+    font-size: 0.775rem;
+    min-width: 0;
+  }
+
+  .share-link-input-group button {
+    padding: 0.45rem 0.85rem;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+  }
+
+  /* QR Code Section */
+  .qr-container {
+    padding: 1rem;
+    margin: 1rem 0;
+  }
+
+  .qr-image {
+    max-width: 160px;
+    width: 100%;
+    height: auto;
+  }
+
+  /* Receive Tab / Channels List */
+  .radar-header {
+    margin-bottom: 1rem;
+  }
+
+  .radar-title {
+    font-size: 1rem;
+  }
+
+  .channel-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 1rem;
+    padding: 1.15rem 1rem;
+    border-radius: var(--radius-md);
+  }
+
+  .channel-left {
+    width: 100%;
+    gap: 0.85rem;
+  }
+
+  .channel-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .channel-file-name {
+    font-size: 0.95rem;
+    max-width: 100%;
+  }
+
+  .channel-meta-row {
+    font-size: 0.75rem;
+    gap: 0.45rem;
+  }
+
+  .channel-btn-connect {
+    width: 100%;
+    justify-content: center;
+    min-height: 46px;
+    font-size: 0.9rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .no-channels-box {
+    padding: 2.25rem 1rem;
+  }
+
+  .no-channels-box h3 {
+    font-size: 1.05rem;
+  }
+
+  .no-channels-box p {
+    font-size: 0.825rem;
+  }
+
+  /* Direct Stream Status & Stats */
+  .file-card-preview {
+    padding: 1.25rem 1rem;
+    border-radius: var(--radius-lg);
+  }
+
+  .file-preview-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.85rem;
+    padding-bottom: 1rem;
+  }
+
+  .file-preview-header button {
+    align-self: flex-start;
+  }
+
+  .file-title-large {
+    font-size: 1.15rem;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.6rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .stat-item {
+    padding: 0.65rem 0.75rem;
+  }
+
+  .stat-label {
+    font-size: 0.68rem;
+  }
+
+  .stat-value {
+    font-size: 0.85rem;
+  }
+
+  /* Download Manual Search Box */
+  .download-search-box {
+    flex-direction: column;
+    width: 100%;
+    gap: 0.6rem;
+  }
+
+  .download-input-wrapper {
+    width: 100%;
+  }
+
+  .download-input {
+    padding: 0.85rem 0.85rem 0.85rem 2.75rem;
+    font-size: 0.95rem;
+  }
+
+  .download-search-box .btn {
+    width: 100%;
+    min-height: 44px;
+    justify-content: center;
+  }
+
+  /* Active Tunnels Section */
+  .active-section {
+    margin-top: 2.25rem;
+  }
+
+  .active-section-title {
+    font-size: 1rem;
+  }
+
+  .active-files-grid {
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+  }
+
+  .active-file-card {
+    padding: 1rem;
+  }
+
+  /* Footer */
+  .app-footer {
+    padding: 1.5rem 1rem;
+  }
+
+  .footer-features {
+    gap: 0.75rem;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* Toast Notification */
+  .toast-msg {
+    bottom: 1rem;
+    right: 1rem;
+    left: 1rem;
+    max-width: calc(100% - 2rem);
+    justify-content: center;
+    font-size: 0.825rem;
+    padding: 0.75rem 1rem;
+  }
+}
+
+/* Compact Mobile Devices (<= 480px) */
+@media (max-width: 480px) {
+  .logo-badge {
+    display: none;
+  }
+
+  .tab-subtext {
+    display: none;
+  }
+
+  .tab-button {
+    font-size: 0.8rem;
+    padding: 0.7rem 0.35rem;
+  }
+
+  .main-wrapper {
+    padding: 1rem 0.75rem 2.5rem;
+  }
+
+  .glass-panel {
+    padding: 1.15rem 0.75rem;
+  }
+}
+
+/* Extra Small Mobile Devices (<= 360px) */
+@media (max-width: 360px) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .code-digits {
+    font-size: 1.65rem;
+    letter-spacing: 0.08em;
+  }
+}
+
 

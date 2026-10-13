@@ -76,7 +76,8 @@ export default function App() {
 
           <div className="status-indicator">
             <span className="status-dot"></span>
-            <span>0 MB Server Storage • P2P Active</span>
+            <span className="status-text-full">0 MB Server Storage • </span>
+            <span>P2P Active</span>
           </div>
         </div>
       </header>
@@ -108,14 +109,14 @@ export default function App() {
               }}
             >
               <UploadCloud size={18} />
-              <span>Send File (Open Tunnel)</span>
+              <span>Send File<span className="tab-subtext"> (Open Tunnel)</span></span>
             </button>
             <button 
               className={`tab-button ${activeTab === 'download' ? 'active' : ''}`}
               onClick={() => setActiveTab('download')}
             >
               <DownloadCloud size={18} />
-              <span>Receive File (Connect)</span>
+              <span>Receive File<span className="tab-subtext"> (Connect)</span></span>
             </button>
           </div>
         </div>
