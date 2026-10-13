@@ -1,8 +1,7 @@
-// Pure Serverless WebRTC P2P Engine using PeerJS & Live MQTT Public Relay
+// Pure Serverless WebRTC P2P Engine using PeerJS & Universal HTTPS Live Discovery
 // Zero Server Storage • Zero Backend Server • Direct Browser-to-Browser Streaming
 
 import Peer from 'peerjs';
-import mqtt from 'mqtt';
 
 const PeerConstructor = Peer.Peer || Peer;
 
@@ -26,8 +25,8 @@ const RTC_CONFIG = {
 };
 
 const CHUNK_SIZE = 64 * 1024; // 64 KB chunk size
-const MQTT_TOPIC = 'ghostdrop/live/channels/v2';
-const MQTT_BROKER = 'wss://broker.hivemq.com:8884/mqtt';
+const NTFY_TOPIC = 'ghostdrop_live_channels_v3';
+const NTFY_URL = `https://ntfy.sh/${NTFY_TOPIC}`;
 
 // In-memory registry of active channels
 const activeAnnouncements = new Map();
@@ -39,19 +38,13 @@ try {
     bc = new BroadcastChannel('ghostdrop-local-lobby');
     bc.onmessage = (e) => {
       const msg = e.data;
-      if (msg && msg.type === 'broadcast' && msg.data) {
-        activeAnnouncements.set(msg.data.code, {
-          ...msg.data,
+      if (msg && msg.type === 'announce' && msg.code) {
+        activeAnnouncements.set(msg.code, {
+          ...msg,
           lastSeen: Date.now()
         });
       } else if (msg && msg.type === 'close' && msg.code) {
         activeAnnouncements.delete(msg.code);
-      } else if (msg && msg.type === 'request') {
-        for (const [, data] of activeAnnouncements.entries()) {
-          if (data && data.isLocal) {
-            bc.postMessage({ type: 'broadcast', data });
-          }
-        }
       }
     };
   }
@@ -59,93 +52,125 @@ try {
   console.warn('[Discovery] BroadcastChannel not supported:', err);
 }
 
-// Global live public relay client (MQTT over WebSocket)
-let mqttClient = null;
+// Global Cross-Device Discovery using universal HTTPS REST & SSE (Never blocked by Brave/Shields)
+let eventSource = null;
+let isListenerInitialized = false;
 
-function getMqttClient() {
-  if (!mqttClient && typeof window !== 'undefined') {
+function initDiscoveryListener() {
+  if (isListenerInitialized || typeof window === 'undefined') return;
+  isListenerInitialized = true;
+
+  // 1. Initial poll of any active channels created in the last 2 minutes
+  fetch(`${NTFY_URL}/json?poll=1&since=2m`)
+    .then((res) => res.text())
+    .then((text) => {
+      parseNtfyLines(text);
+    })
+    .catch((err) => {
+      console.warn('[Discovery] Initial poll warning:', err);
+    });
+
+  // 2. Real-time stream using Server-Sent Events (SSE)
+  if (typeof EventSource !== 'undefined') {
     try {
-      const clientId = 'gd_' + Math.random().toString(16).substring(2, 10);
-      mqttClient = mqtt.connect(MQTT_BROKER, {
-        clientId,
-        clean: true,
-        connectTimeout: 5000,
-        reconnectPeriod: 3000
-      });
+      eventSource = new EventSource(`${NTFY_URL}/sse?since=10s`);
 
-      mqttClient.on('connect', () => {
-        console.log('[Discovery Relay] Connected to live public MQTT relay!');
-        mqttClient.subscribe(MQTT_TOPIC, (err) => {
-          if (!err) {
-            // Trigger announcement request
-            mqttClient.publish(MQTT_TOPIC, JSON.stringify({ type: 'ping' }));
-          }
-        });
-      });
-
-      mqttClient.on('message', (topic, payload) => {
+      eventSource.onmessage = (e) => {
         try {
-          const msg = JSON.parse(payload.toString());
-          if (msg.type === 'announce' && msg.code) {
-            activeAnnouncements.set(msg.code, {
-              ...msg,
-              lastSeen: Date.now()
-            });
-          } else if (msg.type === 'close' && msg.code) {
-            activeAnnouncements.delete(msg.code);
-          } else if (msg.type === 'ping') {
-            // Senders reply with their active channels
-            for (const [, data] of activeAnnouncements.entries()) {
-              if (data && data.isLocal) {
-                mqttClient.publish(MQTT_TOPIC, JSON.stringify({ type: 'announce', ...data }));
-              }
+          const item = JSON.parse(e.data);
+          if (item && item.message) {
+            const data = JSON.parse(item.message);
+            if (data.type === 'announce' && data.code) {
+              activeAnnouncements.set(data.code, {
+                ...data,
+                lastSeen: (item.time * 1000) || Date.now()
+              });
+            } else if (data.type === 'close' && data.code) {
+              activeAnnouncements.delete(data.code);
             }
           }
-        } catch (e) {}
-      });
+        } catch (err) {}
+      };
 
-      mqttClient.on('error', (err) => {
-        console.warn('[Discovery Relay] MQTT broker warning:', err.message);
-      });
-    } catch (err) {
-      console.warn('[Discovery Relay] MQTT init error:', err);
+      eventSource.onerror = () => {
+        // SSE automatically reconnects on network blips
+      };
+    } catch (e) {
+      console.warn('[Discovery] EventSource init error:', e);
     }
   }
-  return mqttClient;
+}
+
+function parseNtfyLines(text) {
+  if (!text) return;
+  const lines = text.trim().split('\n');
+  for (const line of lines) {
+    if (!line) continue;
+    try {
+      const item = JSON.parse(line);
+      if (item && item.message) {
+        const data = JSON.parse(item.message);
+        if (data.type === 'announce' && data.code) {
+          activeAnnouncements.set(data.code, {
+            ...data,
+            lastSeen: (item.time * 1000) || Date.now()
+          });
+        } else if (data.type === 'close' && data.code) {
+          activeAnnouncements.delete(data.code);
+        }
+      }
+    } catch (e) {}
+  }
+}
+
+export function publishChannel(data) {
+  // Broadcast locally across tabs
+  if (bc) bc.postMessage(data);
+
+  // Broadcast globally across devices via universal HTTPS
+  try {
+    fetch(NTFY_URL, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers: { 'Title': 'GhostDrop' }
+    }).catch(() => {});
+  } catch (e) {}
 }
 
 export function requestChannelScan() {
-  const client = getMqttClient();
-  if (client && client.connected) {
-    client.publish(MQTT_TOPIC, JSON.stringify({ type: 'ping' }));
-  }
-  if (bc) bc.postMessage({ type: 'request' });
+  // Re-poll the last 2 minutes for immediate fresh list
+  fetch(`${NTFY_URL}/json?poll=1&since=2m`)
+    .then((res) => res.text())
+    .then((text) => {
+      parseNtfyLines(text);
+    })
+    .catch(() => {});
 }
 
 // ----------------------------------------------------
 // DISCOVERY HOOK FOR RECEIVER (Listens for Open Channels)
 // ----------------------------------------------------
 export function subscribeToOpenChannels(onUpdate) {
-  getMqttClient();
+  initDiscoveryListener();
   requestChannelScan();
 
-  // Periodic scan & clean up expired channels
+  // Periodic poll & clean up expired channels
   const interval = setInterval(() => {
     requestChannelScan();
 
     const now = Date.now();
     const list = [];
     for (const [code, data] of activeAnnouncements.entries()) {
-      if (now - data.lastSeen < 20000 && now < data.expiresAt) {
+      if (now - data.lastSeen < 30000 && now < data.expiresAt) {
         list.push({
           id: data.code,
           code: data.code,
           originalName: data.name,
           size: data.size,
-          mimeType: data.type,
+          mimeType: data.typeMime || data.type,
           expiresAt: data.expiresAt
         });
-      } else if (now - data.lastSeen >= 20000) {
+      } else if (now - data.lastSeen >= 30000) {
         activeAnnouncements.delete(code);
       }
     }
@@ -168,29 +193,29 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
     debug: 1
   });
 
-  const client = getMqttClient();
+  initDiscoveryListener();
 
   const channelData = {
+    type: 'announce',
     code,
     name: file.name,
     size: file.size,
-    type: file.type || 'application/octet-stream',
+    typeMime: file.type || 'application/octet-stream',
     expiresAt: Date.now() + 2 * 3600 * 1000,
     isLocal: true,
     lastSeen: Date.now()
   };
   activeAnnouncements.set(code, channelData);
 
-  const announce = () => {
+  // Announce immediately
+  publishChannel(channelData);
+
+  // Re-announce heartbeat every 6 seconds to keep channel alive
+  broadcastTimer = setInterval(() => {
     if (isClosed) return;
-    const payload = JSON.stringify({ type: 'announce', ...channelData });
-    if (client && client.connected) {
-      client.publish(MQTT_TOPIC, payload);
-    }
-    if (bc) bc.postMessage({ type: 'broadcast', data: channelData });
-  };
-  announce();
-  broadcastTimer = setInterval(announce, 2500);
+    channelData.lastSeen = Date.now();
+    publishChannel(channelData);
+  }, 6000);
 
   peer.on('open', (id) => {
     console.log('[P2P Sender] Registered on PeerJS Cloud with ID:', id);
@@ -297,10 +322,7 @@ export function startSenderTunnel(code, file, { onStatus, onProgress, onError })
       isClosed = true;
       if (broadcastTimer) clearInterval(broadcastTimer);
       activeAnnouncements.delete(code);
-      if (client && client.connected) {
-        client.publish(MQTT_TOPIC, JSON.stringify({ type: 'close', code }));
-      }
-      if (bc) bc.postMessage({ type: 'close', code });
+      publishChannel({ type: 'close', code });
       try { peer.destroy(); } catch (e) {}
     }
   };
