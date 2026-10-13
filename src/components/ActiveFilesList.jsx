@@ -4,32 +4,19 @@ import {
 } from 'lucide-react';
 import { formatBytes } from '../utils';
 import CountdownTimer from './CountdownTimer';
-import { API_BASE } from '../apiConfig';
+import { subscribeToOpenChannels, requestChannelScan } from '../p2pEngine';
 
 export default function ActiveFilesList({ refreshTrigger, onSelectFileForDownload, showToast }) {
   const [tunnels, setTunnels] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState(null);
 
-  const fetchActiveTunnels = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/tunnel/active`);
-      const data = await res.json();
-      if (data.success && Array.isArray(data.files)) {
-        setTunnels(data.files);
-      }
-    } catch (err) {
-      console.warn('Could not fetch active tunnels:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchActiveTunnels();
-    const interval = setInterval(fetchActiveTunnels, 10000);
-    return () => clearInterval(interval);
+    const unsubscribe = subscribeToOpenChannels((list) => {
+      setTunnels(list);
+    });
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, [refreshTrigger]);
 
   const copyCode = (code, id) => {
@@ -39,20 +26,7 @@ export default function ActiveFilesList({ refreshTrigger, onSelectFileForDownloa
     showToast(`Code ${code} copied!`);
   };
 
-  const closeTunnel = async (code) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/tunnel/${code}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Tunnel closed.');
-        fetchActiveTunnels();
-      }
-    } catch (err) {
-      showToast('Error closing tunnel', 'error');
-    }
-  };
-
-  if (tunnels.length === 0 && !loading) {
+  if (tunnels.length === 0) {
     return null;
   }
 
@@ -66,10 +40,10 @@ export default function ActiveFilesList({ refreshTrigger, onSelectFileForDownloa
         <button 
           className="btn btn-secondary" 
           style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
-          onClick={fetchActiveTunnels}
-          title="Refresh active tunnels"
+          onClick={requestChannelScan}
+          title="Scan active channels"
         >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
+          <RefreshCw size={13} /> Refresh
         </button>
       </div>
 
@@ -83,7 +57,6 @@ export default function ActiveFilesList({ refreshTrigger, onSelectFileForDownloa
                 </span>
                 <CountdownTimer 
                   expiresAt={t.expiresAt} 
-                  onExpire={fetchActiveTunnels} 
                 />
               </div>
 
@@ -123,15 +96,6 @@ export default function ActiveFilesList({ refreshTrigger, onSelectFileForDownloa
                 title="Connect to Tunnel"
               >
                 <Zap size={14} /> Connect
-              </button>
-
-              <button 
-                className="btn btn-danger"
-                style={{ padding: '0.45rem 0.6rem', fontSize: '0.8rem' }}
-                onClick={() => closeTunnel(t.code)}
-                title="Close Tunnel"
-              >
-                <Trash2 size={14} />
               </button>
             </div>
           </div>

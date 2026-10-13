@@ -11,8 +11,11 @@
   "dependencies": {
     "canvas-confetti": "^1.9.4",
     "lucide-react": "^1.16.0",
+    "peerjs": "^1.5.5",
+    "qrcode": "^1.5.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "trystero": "^0.26.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

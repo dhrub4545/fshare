@@ -6,8 +6,7 @@ import {
 import confetti from 'canvas-confetti';
 import { formatBytes } from '../utils';
 import CountdownTimer from './CountdownTimer';
-import { startReceiverTunnel } from '../webrtc';
-import { API_BASE } from '../apiConfig';
+import { startReceiverTunnel, subscribeToOpenChannels, requestChannelScan } from '../p2pEngine';
 
 export default function DownloadView({ initialCode, showToast }) {
   const [openChannels, setOpenChannels] = useState([]);
@@ -19,21 +18,14 @@ export default function DownloadView({ initialCode, showToast }) {
   const [manualCode, setManualCode] = useState(initialCode || '');
   const receiverSessionRef = useRef(null);
 
-  // Poll for open broadcast channels
-  const fetchOpenChannels = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/tunnel/active`);
-      const data = await res.json();
-      if (data.success && Array.isArray(data.files)) {
-        setOpenChannels(data.files);
-      }
-    } catch (e) {}
-  };
-
+  // Subscribe to live open broadcast channels via P2P relay lobby
   useEffect(() => {
-    fetchOpenChannels();
-    const interval = setInterval(fetchOpenChannels, 2500);
-    return () => clearInterval(interval);
+    const unsubscribe = subscribeToOpenChannels((channels) => {
+      setOpenChannels(channels);
+    });
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
   // Clean up WebRTC session on unmount
@@ -79,7 +71,7 @@ export default function DownloadView({ initialCode, showToast }) {
     });
   };
 
-  const handleManualConnect = async () => {
+  const handleManualConnect = () => {
     let cleanCode = manualCode.trim();
     if (cleanCode.includes('/download/')) {
       cleanCode = cleanCode.split('/download/').pop().split('?')[0].split('/')[0];
@@ -89,20 +81,8 @@ export default function DownloadView({ initialCode, showToast }) {
       return;
     }
 
-    setLoadingChannels(true);
-    try {
-      const res = await fetch(`${API_BASE}/api/tunnel/info/${cleanCode}`);
-      const data = await res.json();
-      if (data.success && data.tunnel) {
-        connectToChannel(cleanCode, data.tunnel.file);
-      } else {
-        showToast('Channel not found or sender disconnected.', 'error');
-      }
-    } catch (e) {
-      showToast('Could not reach server', 'error');
-    } finally {
-      setLoadingChannels(false);
-    }
+    // Direct WebRTC connection to peer
+    connectToChannel(cleanCode, { name: 'Shared File', size: 0 });
   };
 
   const disconnectSession = () => {
@@ -113,7 +93,6 @@ export default function DownloadView({ initialCode, showToast }) {
     setSelectedChannel(null);
     setReceivingStatus('idle');
     setDownloadStats({ percent: 0, bytesReceived: 0, totalBytes: 0, speedMBps: 0 });
-    fetchOpenChannels();
   };
 
   return (
@@ -243,8 +222,8 @@ export default function DownloadView({ initialCode, showToast }) {
             <button 
               className="btn btn-secondary"
               style={{ fontSize: '0.8rem', padding: '0.35rem 0.75rem' }}
-              onClick={fetchOpenChannels}
-              title="Refresh open channels"
+              onClick={requestChannelScan}
+              title="Scan for open channels"
             >
               <RefreshCw size={13} /> Refresh
             </button>
@@ -267,7 +246,7 @@ export default function DownloadView({ initialCode, showToast }) {
                         <span>•</span>
                         <span style={{ color: '#38bdf8' }}>🟢 Sender Ready</span>
                         <span>•</span>
-                        <CountdownTimer expiresAt={channel.expiresAt} onExpire={fetchOpenChannels} />
+                        <CountdownTimer expiresAt={channel.expiresAt} />
                       </div>
                     </div>
                   </div>

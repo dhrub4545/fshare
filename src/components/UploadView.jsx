@@ -4,10 +4,10 @@ import {
   QrCode, RefreshCw, Shield, Clock, Zap, AlertCircle, Radio, XCircle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
+import QRCode from 'qrcode';
 import { formatBytes } from '../utils';
 import CountdownTimer from './CountdownTimer';
-import { startSenderTunnel } from '../webrtc';
-import { API_BASE } from '../apiConfig';
+import { startSenderTunnel } from '../p2pEngine';
 
 export default function UploadView({ onUploadSuccess, showToast }) {
   const [dragActive, setDragActive] = useState(false);
@@ -66,29 +66,38 @@ export default function UploadView({ onUploadSuccess, showToast }) {
     if (!selectedFile) return;
 
     try {
-      // Step 1: Create signaling room on server
-      const res = await fetch(`${API_BASE}/api/tunnel/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originalName: selectedFile.name,
-          size: selectedFile.size,
-          mimeType: selectedFile.type
-        })
-      });
-
-      const data = await res.json();
-      if (!data.success) {
-        showToast(data.message || 'Failed to create tunnel', 'error');
-        return;
+      // Generate clean 6-digit access code directly in browser
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = Date.now() + 2 * 3600 * 1000;
+      const shareUrl = `${window.location.origin}/#/download/${code}`;
+      
+      // Generate QR Code data URL client-side
+      let qrCodeData = '';
+      try {
+        qrCodeData = await QRCode.toDataURL(shareUrl, {
+          margin: 1,
+          width: 220,
+          color: { dark: '#000000', light: '#ffffff' }
+        });
+      } catch (e) {
+        console.warn('QR code generation error:', e);
       }
 
-      setTunnelData(data);
-      setTunnelStatus('waiting');
-      showToast('P2P Tunnel created! Share the 6-digit code.');
+      const newTunnelData = {
+        code,
+        expiresAt,
+        originalName: selectedFile.name,
+        size: selectedFile.size,
+        mimeType: selectedFile.type,
+        qrCode: qrCodeData
+      };
 
-      // Step 2: Initialize WebRTC P2P Sender
-      senderSessionRef.current = startSenderTunnel(data.code, selectedFile, {
+      setTunnelData(newTunnelData);
+      setTunnelStatus('waiting');
+      showToast('P2P Tunnel created! Share the 6-digit code or link.');
+
+      // Initialize WebRTC P2P Sender via PeerJS & Relay Discovery
+      senderSessionRef.current = startSenderTunnel(code, selectedFile, {
         onStatus: (status) => {
           setTunnelStatus(status);
           if (status === 'completed') {
@@ -105,9 +114,10 @@ export default function UploadView({ onUploadSuccess, showToast }) {
       });
 
       if (onUploadSuccess) {
-        onUploadSuccess(data);
+        onUploadSuccess(newTunnelData);
       }
     } catch (err) {
+      console.error('Error starting tunnel:', err);
       showToast('Error establishing tunnel. Check network.', 'error');
     }
   };
@@ -129,9 +139,6 @@ export default function UploadView({ onUploadSuccess, showToast }) {
     if (senderSessionRef.current) {
       senderSessionRef.current.close();
       senderSessionRef.current = null;
-    }
-    if (tunnelData?.code) {
-      fetch(`${API_BASE}/api/tunnel/${tunnelData.code}`, { method: 'DELETE' }).catch(() => {});
     }
     setTunnelData(null);
     setTunnelStatus('idle');
