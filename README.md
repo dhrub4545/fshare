@@ -108,7 +108,7 @@ flowchart TD
     R_ENG <-->|4. Gather Candidates| ICE
 
     %% P2P Data Streaming Phase
-    S_MEM ==>|"5. Direct Encrypted WebRTC DataChannel (64KB Chunks • 0MB Server Storage)"|==> R_BUF
+    S_MEM ==>|"5. Direct Encrypted WebRTC DataChannel (64KB Chunks • 0MB Server Storage)"| R_BUF
 ```
 
 ---
